@@ -26,9 +26,6 @@ npm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# cache
-.cache/
-
 # cap build temp
 /src/app/_api_cap_backup/
 .cap-build-active
