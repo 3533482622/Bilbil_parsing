@@ -41,8 +41,20 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    fetchLibrary();
-  }, [fetchLibrary]);
+    let cancelled = false;
+
+    void appServices.listMedia()
+      .then((files) => {
+        if (!cancelled) setLibraryFiles(files);
+      })
+      .catch(() => {
+        // 忽略列表拉取错误
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleParse = useCallback(async (inputUrl: string) => {
     setUrl(inputUrl);

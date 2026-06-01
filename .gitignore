@@ -4,6 +4,7 @@
 # next.js
 /.next/
 /out/
+.netlify/
 
 # capacitor
 /android/
@@ -29,3 +30,6 @@ next-env.d.ts
 # cap build temp
 /src/app/_api_cap_backup/
 .cap-build-active
+
+# cache
+.cache/

@@ -123,6 +123,7 @@ npm run cap:sync
 ## 注意事项
 
 - 大会员番剧需要在终端中扫码登录（BBDown 会显示二维码，请查看运行 `npm run dev` 的终端窗口）
-- 下载的大文件缓存到 `.cache/download/`，建议定期清理
-- 切片输出保存在 `.cache/output/`
-- 仅支持 Windows 系统（依赖 BBDown.exe）
+- 本地开发默认将下载文件缓存到 `.cache/download/`，切片输出保存到 `.cache/output/`
+- 生产环境默认使用系统临时目录缓存文件，避免 Netlify 等 Serverless 环境写入只读目录
+- Windows 本地默认查找 `tools` 或 `redio/tools` 下的 `BBDown.exe`、`ffmpeg.exe`、`ffprobe.exe`
+- Linux/Netlify 部署需要提供 Linux 可执行文件，可通过 `BBDOWN_PATH`、`FFMPEG_PATH`、`FFPROBE_PATH` 环境变量指定，或确保 `BBDown`、`ffmpeg`、`ffprobe` 在 `PATH` 中可用

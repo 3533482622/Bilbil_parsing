@@ -1,32 +1,58 @@
 import path from "path";
-import os from "os";
 import { execFile, spawn, type ChildProcess } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
 import iconv from "iconv-lite";
 import { MediaKind, MediaFileItem, VideoPage, AudioStream, VideoStream, RemotePreviewStream } from "./types";
+import { absolutePathToServeUrl, CACHE_DIR, DOWNLOAD_DIR, ensureDir, OUTPUT_DIR } from "./cache-paths";
+
+export { CACHE_DIR, getCachePath } from "./cache-paths";
 
 const execFileAsync = promisify(execFile);
 
-const PROJECT_ROOT = path.resolve(process.cwd(), "..");
-const TOOLS_DIR = path.join(PROJECT_ROOT, "redio", "tools");
-export const CACHE_DIR =
-  process.env.CACHE_DIR ||
-  (process.env.NODE_ENV === "production"
-    ? path.join(os.tmpdir(), "bili-parser-cache")
-    : path.join(process.cwd(), ".cache"));
-const DOWNLOAD_DIR = path.join(CACHE_DIR, "download");
-const OUTPUT_DIR = path.join(CACHE_DIR, "output");
+const isWindows = process.platform === "win32";
+const LOCAL_TOOLS_DIRS = [
+  path.join(process.cwd(), "tools"),
+  path.join(process.cwd(), "redio", "tools"),
+  ...(process.env.NODE_ENV === "production"
+    ? []
+    : [path.resolve(process.cwd(), "..", "redio", "tools")]),
+];
 
-const BBDOWN = path.join(TOOLS_DIR, "BBDown.exe");
-const FFMPEG = path.join(TOOLS_DIR, "ffmpeg.exe");
-const FFPROBE = path.join(TOOLS_DIR, "ffprobe.exe");
-
-function ensureDir(dir: string) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+function resolveToolPath(envName: string, localNames: string[], fallbackCommand: string) {
+  const envValue = process.env[envName];
+  if (envValue) {
+    return path.isAbsolute(envValue) ? envValue : path.resolve(/*turbopackIgnore: true*/ process.cwd(), envValue);
   }
+
+  for (const name of localNames) {
+    for (const dir of LOCAL_TOOLS_DIRS) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+
+  return isWindows ? path.join(LOCAL_TOOLS_DIRS[0], localNames[0]) : fallbackCommand;
 }
+
+function formatToolLaunchError(toolName: string, toolPath: string, err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = typeof err === "object" && err !== null && "code" in err ? String(err.code) : "";
+
+  if (code === "ENOENT") {
+    return `${toolName} 不存在或无法在服务器中找到：${toolPath}。本地 Windows 可使用 tools 或 redio/tools 下的 .exe；Netlify/Linux 需要安装对应 Linux 可执行文件，并通过 ${toolName.toUpperCase()}_PATH 环境变量指定，或确保命令在 PATH 中可用。`;
+  }
+
+  if (code === "EACCES") {
+    return `${toolName} 没有执行权限：${toolPath}。请给服务器上的可执行文件添加执行权限。`;
+  }
+
+  return `${toolName} 执行失败：${message}`;
+}
+
+const BBDOWN = resolveToolPath("BBDOWN_PATH", ["BBDown.exe", "BBDown"], "BBDown");
+const FFMPEG = resolveToolPath("FFMPEG_PATH", ["ffmpeg.exe", "ffmpeg"], "ffmpeg");
+const FFPROBE = resolveToolPath("FFPROBE_PATH", ["ffprobe.exe", "ffprobe"], "ffprobe");
 
 /** BBDown 在 Windows 上可能输出 UTF-8 或 GBK，自动检测 */
 function decodeBbdownOutput(stdout: Buffer, stderr: Buffer): string {
@@ -51,35 +77,21 @@ function decodeBbdownOutput(stdout: Buffer, stderr: Buffer): string {
   return utf8;
 }
 
-/** 将绝对路径转为 /api/serve/... URL */
-export function absolutePathToServeUrl(absPath: string): string {
-  const resolved = path.resolve(absPath);
-  const cacheRoot = path.resolve(CACHE_DIR);
-  if (!resolved.startsWith(cacheRoot)) {
-    throw new Error("文件不在缓存目录内");
-  }
-  const relative = path.relative(cacheRoot, resolved);
-  const segments = relative.split(path.sep).map((s) => encodeURIComponent(s));
-  return `/api/serve/${segments.join("/")}`;
-}
-
 export function getToolsPath() {
   return { bbdown: BBDOWN, ffmpeg: FFMPEG, ffprobe: FFPROBE };
 }
 
-export function getCachePath() {
-  ensureDir(DOWNLOAD_DIR);
-  ensureDir(OUTPUT_DIR);
-  return { download: DOWNLOAD_DIR, output: OUTPUT_DIR };
-}
-
 async function runBbdown(args: string[], timeoutMs = 120000): Promise<string> {
-  const { stdout, stderr } = await execFileAsync(BBDOWN, args, {
-    timeout: timeoutMs,
-    encoding: "buffer",
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  return decodeBbdownOutput(stdout as Buffer, stderr as Buffer);
+  try {
+    const { stdout, stderr } = await execFileAsync(BBDOWN, args, {
+      timeout: timeoutMs,
+      encoding: "buffer",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    return decodeBbdownOutput(stdout as Buffer, stderr as Buffer);
+  } catch (err) {
+    throw new Error(formatToolLaunchError("BBDown", BBDOWN, err));
+  }
 }
 
 /**
@@ -231,7 +243,7 @@ export function downloadBilibiliMedia(
   });
 
   proc.on("error", (err) => {
-    onError(`启动 BBDown 失败: ${err.message}`);
+    onError(formatToolLaunchError("BBDown", BBDOWN, err));
   });
 
   return proc;
@@ -274,11 +286,15 @@ export async function clipMedia(
     args.push("-c:a", "libmp3lame", "-b:a", "192k", "-y", outputPath);
   }
 
-  await execFileAsync(FFMPEG, args, {
-    timeout: 120000,
-    encoding: "buffer",
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  try {
+    await execFileAsync(FFMPEG, args, {
+      timeout: 120000,
+      encoding: "buffer",
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (err) {
+    throw new Error(formatToolLaunchError("FFmpeg", FFMPEG, err));
+  }
 
   return {
     outputPath,
@@ -302,19 +318,25 @@ export async function clipAudio(
  * 调用 ffprobe 获取媒体时长
  */
 export async function getAudioDuration(filePath: string): Promise<number> {
-  const { stdout } = await execFileAsync(
-    FFPROBE,
-    [
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      filePath,
-    ],
-    { timeout: 10000, encoding: "utf-8" },
-  );
+  let stdout: string;
+  try {
+    const result = await execFileAsync(
+      FFPROBE,
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        filePath,
+      ],
+      { timeout: 10000, encoding: "utf-8" },
+    );
+    stdout = result.stdout;
+  } catch (err) {
+    throw new Error(formatToolLaunchError("FFprobe", FFPROBE, err));
+  }
 
   return parseFloat(stdout.trim());
 }
@@ -336,7 +358,6 @@ export function listMediaFiles(): MediaFileItem[] {
       if (entry.isDirectory()) {
         scan(fullPath, source);
       } else {
-        const ext = path.extname(entry.name).toLowerCase();
         const isAudio = /\.(m4a|aac|mp3|flac|wav|ogg)$/i.test(entry.name);
         const isVideo = /\.(mp4|mkv|avi|mov|flv|webm)$/i.test(entry.name);
         if (isAudio || isVideo) {
