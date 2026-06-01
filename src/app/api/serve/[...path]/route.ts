@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-
-const CACHE_DIR = path.join(process.cwd(), ".cache");
+import { CACHE_DIR } from "@/lib/tools";
 
 export async function GET(
   request: NextRequest,

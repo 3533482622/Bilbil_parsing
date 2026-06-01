@@ -1,4 +1,5 @@
 import path from "path";
+import os from "os";
 import { execFile, spawn, type ChildProcess } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
@@ -9,7 +10,11 @@ const execFileAsync = promisify(execFile);
 
 const PROJECT_ROOT = path.resolve(process.cwd(), "..");
 const TOOLS_DIR = path.join(PROJECT_ROOT, "redio", "tools");
-export const CACHE_DIR = path.join(process.cwd(), ".cache");
+export const CACHE_DIR =
+  process.env.CACHE_DIR ||
+  (process.env.NODE_ENV === "production"
+    ? path.join(os.tmpdir(), "bili-parser-cache")
+    : path.join(process.cwd(), ".cache"));
 const DOWNLOAD_DIR = path.join(CACHE_DIR, "download");
 const OUTPUT_DIR = path.join(CACHE_DIR, "output");
 
