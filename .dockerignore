@@ -1,0 +1,17 @@
+node_modules
+.next
+out
+.cache
+.netlify
+android
+ios
+.capacitor
+*.md
+.git
+.gitignore
+.env*.local
+npm-debug.log*
+.DS_Store
+src/app/_api_cap_backup
+.cap-build-active
+tools
