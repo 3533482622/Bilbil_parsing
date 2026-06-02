@@ -27,6 +27,7 @@ export default function TimelineEditor({
 }: TimelineEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pointerActiveRef = useRef(false);
   const [dragging, setDragging] = useState<"start" | "end" | null>(null);
   const [hoverHandle, setHoverHandle] = useState<"start" | "end" | null>(null);
 
@@ -175,53 +176,48 @@ export default function TimelineEditor({
   );
 
   const endInteraction = useCallback(() => {
+    pointerActiveRef.current = false;
     setDragging(null);
     setHoverHandle(null);
   }, []);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    beginInteraction(e.clientX);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    moveInteraction(e.clientX);
-  };
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    e.preventDefault();
-    beginInteraction(e.touches[0].clientX);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    e.preventDefault();
-    moveInteraction(e.touches[0].clientX);
-  };
-
-  const handleTouchEnd = () => {
-    endInteraction();
-  };
-
   useEffect(() => {
-    if (!dragging) return;
-    const onMouseUp = () => endInteraction();
-    window.addEventListener("mouseup", onMouseUp);
-    return () => window.removeEventListener("mouseup", onMouseUp);
-  }, [dragging, endInteraction]);
+    const onPointerMove = (e: PointerEvent) => {
+      if (!pointerActiveRef.current) return;
+      e.preventDefault();
+      moveInteraction(e.clientX);
+    };
+    const onPointerUp = () => {
+      if (!pointerActiveRef.current) return;
+      endInteraction();
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [moveInteraction, endInteraction]);
 
   return (
     <div className="w-full">
       <div
         ref={containerRef}
         className="relative w-full cursor-crosshair select-none touch-none"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          pointerActiveRef.current = true;
+          beginInteraction(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (pointerActiveRef.current) return;
+          moveInteraction(e.clientX);
+        }}
+        onPointerUp={endInteraction}
+        onPointerCancel={endInteraction}
         onMouseLeave={() => !dragging && setHoverHandle(null)}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onTouchCancel={handleTouchEnd}
       >
         <canvas ref={canvasRef} className="w-full rounded-lg" />
       </div>

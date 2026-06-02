@@ -61,10 +61,13 @@ export default function Home() {
     setStep("parsed" as AppStep);
     setError("");
     setVideoInfo(null);
+    setSelectedPage(1);
 
     try {
       const info = await appServices.parseVideo(inputUrl);
       setVideoInfo(info);
+      const firstPage = info.pages[0]?.index ?? 1;
+      setSelectedPage((prev) => (info.pages.some((p) => p.index === prev) ? prev : firstPage));
     } catch (err) {
       setError(err instanceof Error ? err.message : "解析失败");
       setStep("input");
@@ -87,6 +90,11 @@ export default function Home() {
 
   const handleDownload = useCallback(async () => {
     if (!url) return;
+    if (videoInfo && !videoInfo.pages.some((p) => p.index === selectedPage)) {
+      setError(`当前视频仅有 ${videoInfo.pages.length} 个分P，请重新选择分P`);
+      setSelectedPage(videoInfo.pages[0]?.index ?? 1);
+      return;
+    }
     setStep("downloading");
     setError("");
     setProgressMsg("正在启动下载...");
@@ -107,7 +115,7 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "下载失败，请重试");
       setStep("parsed" as AppStep);
     }
-  }, [url, selectedPage, mediaKind, fetchLibrary]);
+  }, [url, selectedPage, mediaKind, fetchLibrary, videoInfo]);
 
   const handleMediaLoaded = useCallback((dur: number) => {
     setAudioDuration(dur);
