@@ -14,9 +14,12 @@ ARG BBDOWN_VERSION=1.6.3
 ARG BBDOWN_BUILD=20240814
 RUN curl -fsSL -o /tmp/bbdown.zip \
       "https://github.com/nilaoda/BBDown/releases/download/${BBDOWN_VERSION}/BBDown_${BBDOWN_VERSION}_${BBDOWN_BUILD}_linux-x64.zip" \
-    && unzip -q /tmp/bbdown.zip -d /opt/bbdown \
+    && unzip -q /tmp/bbdown.zip -d /tmp/bbdown-extract \
+    && mkdir -p /opt/bbdown \
+    && cp -a "$(dirname "$(find /tmp/bbdown-extract -type f -name BBDown | head -1)")"/. /opt/bbdown/ \
     && chmod -R 755 /opt/bbdown \
-    && rm -f /tmp/bbdown.zip
+    && test -x /opt/bbdown/BBDown \
+    && rm -rf /tmp/bbdown-extract /tmp/bbdown.zip
 
 WORKDIR /app
 
