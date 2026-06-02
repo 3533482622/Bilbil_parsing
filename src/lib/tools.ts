@@ -90,7 +90,17 @@ async function runBbdown(args: string[], timeoutMs = 120000): Promise<string> {
     });
     return decodeBbdownOutput(stdout as Buffer, stderr as Buffer);
   } catch (err) {
-    throw new Error(formatToolLaunchError("BBDown", BBDOWN, err));
+    const execErr = err as NodeJS.ErrnoException & { stderr?: Buffer; stdout?: Buffer };
+    if (execErr.code === "ENOENT" || execErr.code === "EACCES") {
+      throw new Error(formatToolLaunchError("BBDown", BBDOWN, err));
+    }
+    const hint = decodeBbdownOutput(
+      (execErr.stdout as Buffer) || Buffer.alloc(0),
+      (execErr.stderr as Buffer) || Buffer.alloc(0),
+    ).trim();
+    throw new Error(
+      hint ? `BBDown 执行失败：${hint.slice(-800)}` : formatToolLaunchError("BBDown", BBDOWN, err),
+    );
   }
 }
 

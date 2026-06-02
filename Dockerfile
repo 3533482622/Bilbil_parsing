@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     ffmpeg \
     libssl3 \
+    libicu72 \
     && rm -rf /var/lib/apt/lists/*
 
 # BBDown linux-x64 (adjust version if release asset name changes)
