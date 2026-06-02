@@ -23,12 +23,14 @@ export default function MediaPlayer({
   endTime,
 }: MediaPlayerProps) {
   const mediaRef = useRef<HTMLAudioElement | HTMLVideoElement>(null);
+  const seekingTargetRef = useRef<HTMLElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8);
   const [showVolume, setShowVolume] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [seeking, setSeeking] = useState(false);
 
   useEffect(() => {
     const media = mediaRef.current;
@@ -39,6 +41,7 @@ export default function MediaPlayer({
     setDuration(0);
 
     const handleLoaded = () => {
+      if (!Number.isFinite(media.duration) || media.duration <= 0) return;
       setDuration(media.duration);
       onLoaded?.(media.duration);
     };
@@ -55,17 +58,32 @@ export default function MediaPlayer({
     };
 
     media.addEventListener("loadedmetadata", handleLoaded);
+    media.addEventListener("durationchange", handleLoaded);
+    media.addEventListener("canplay", handleLoaded);
     media.addEventListener("timeupdate", handleTimeUpdate);
     media.addEventListener("ended", handleEnded);
     media.addEventListener("error", handleError);
+    media.load();
+    if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      handleLoaded();
+    }
 
     return () => {
       media.removeEventListener("loadedmetadata", handleLoaded);
+      media.removeEventListener("durationchange", handleLoaded);
+      media.removeEventListener("canplay", handleLoaded);
       media.removeEventListener("timeupdate", handleTimeUpdate);
       media.removeEventListener("ended", handleEnded);
       media.removeEventListener("error", handleError);
     };
   }, [src, mediaKind, onTimeUpdate, onLoaded, onError]);
+
+  useEffect(() => {
+    const media = mediaRef.current;
+    if (!media) return;
+    media.volume = volume;
+    media.muted = muted;
+  }, [volume, muted, src, mediaKind]);
 
   const togglePlay = useCallback(() => {
     const media = mediaRef.current;
@@ -96,11 +114,16 @@ export default function MediaPlayer({
     return () => media.removeEventListener("timeupdate", checkBounds);
   }, [endTime]);
 
-  const seek = useCallback((time: number) => {
-    const media = mediaRef.current;
-    if (!media) return;
-    media.currentTime = time;
-  }, []);
+  const seek = useCallback(
+    (time: number) => {
+      const media = mediaRef.current;
+      if (!media || !Number.isFinite(duration) || duration <= 0) return;
+      const nextTime = Math.max(0, Math.min(duration, time));
+      media.currentTime = nextTime;
+      setCurrentTime(nextTime);
+    },
+    [duration],
+  );
 
   const seekFromEvent = useCallback(
     (clientX: number, target: HTMLElement) => {
@@ -110,6 +133,29 @@ export default function MediaPlayer({
     },
     [duration, seek],
   );
+
+  useEffect(() => {
+    if (!seeking) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const target = seekingTargetRef.current;
+      if (target) seekFromEvent(event.clientX, target);
+    };
+
+    const stopSeeking = () => {
+      seekingTargetRef.current = null;
+      setSeeking(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopSeeking);
+    window.addEventListener("pointercancel", stopSeeking);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopSeeking);
+      window.removeEventListener("pointercancel", stopSeeking);
+    };
+  }, [seeking, seekFromEvent]);
 
   const formatTime = (t: number) => {
     const h = Math.floor(t / 3600);
@@ -146,8 +192,15 @@ export default function MediaPlayer({
 
   const progressBar = (className: string) => (
     <div
+      data-media-progress
       className={`h-2.5 sm:h-2 bg-gray-200 dark:bg-gray-600 rounded-full cursor-pointer relative group touch-none ${className}`}
       onClick={(e) => seekFromEvent(e.clientX, e.currentTarget)}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        seekingTargetRef.current = e.currentTarget;
+        setSeeking(true);
+        seekFromEvent(e.clientX, e.currentTarget);
+      }}
       onTouchStart={(e) => {
         if (e.touches.length === 1) {
           e.preventDefault();
@@ -182,6 +235,7 @@ export default function MediaPlayer({
       {mediaKind === "video" && (
         <div className="w-full max-h-[50vh] sm:max-h-none aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
           <video
+            key={`${mediaKind}:${src}`}
             ref={mediaRef as React.RefObject<HTMLVideoElement | null>}
             src={src}
             preload="metadata"
@@ -193,7 +247,7 @@ export default function MediaPlayer({
       )}
 
       {mediaKind === "audio" && (
-        <audio ref={mediaRef as React.RefObject<HTMLAudioElement | null>} src={src} preload="metadata" />
+        <audio key={`${mediaKind}:${src}`} ref={mediaRef as React.RefObject<HTMLAudioElement | null>} src={src} preload="metadata" />
       )}
 
       {/* 移动端：进度条独占一行 */}
