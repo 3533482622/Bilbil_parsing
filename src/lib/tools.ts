@@ -18,21 +18,56 @@ const LOCAL_TOOLS_DIRS = [
     ? []
     : [path.resolve(process.cwd(), "..", "redio", "tools")]),
 ];
+const PRODUCTION_TOOL_DIRS = ["/opt/bbdown", "/usr/local/bin"];
 
 function resolveToolPath(envName: string, localNames: string[], fallbackCommand: string) {
+  const candidates: string[] = [];
   const envValue = process.env[envName];
   if (envValue) {
-    return path.isAbsolute(envValue) ? envValue : path.resolve(/*turbopackIgnore: true*/ process.cwd(), envValue);
+    candidates.push(
+      path.isAbsolute(envValue)
+        ? envValue
+        : path.resolve(/*turbopackIgnore: true*/ process.cwd(), envValue),
+    );
   }
 
-  for (const name of localNames) {
-    for (const dir of LOCAL_TOOLS_DIRS) {
-      const candidate = path.join(dir, name);
-      if (fs.existsSync(candidate)) return candidate;
+  const searchDirs =
+    process.env.NODE_ENV === "production"
+      ? [...PRODUCTION_TOOL_DIRS, ...LOCAL_TOOLS_DIRS]
+      : LOCAL_TOOLS_DIRS;
+
+  for (const dir of searchDirs) {
+    for (const name of localNames) {
+      candidates.push(path.join(dir, name));
     }
   }
 
-  return isWindows ? path.join(LOCAL_TOOLS_DIRS[0], localNames[0]) : fallbackCommand;
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  if (!isWindows) return fallbackCommand;
+  return path.join(LOCAL_TOOLS_DIRS[0], localNames[0]);
+}
+
+function getBbdownPath() {
+  return resolveToolPath("BBDOWN_PATH", ["BBDown.exe", "BBDown"], "BBDown");
+}
+
+function getFfmpegPath() {
+  return resolveToolPath("FFMPEG_PATH", ["ffmpeg.exe", "ffmpeg"], "ffmpeg");
+}
+
+function getFfprobePath() {
+  return resolveToolPath("FFPROBE_PATH", ["ffprobe.exe", "ffprobe"], "ffprobe");
+}
+
+function bbdownExecOptions() {
+  const bbdown = getBbdownPath();
+  if (path.isAbsolute(bbdown) && fs.existsSync(bbdown)) {
+    return { cwd: path.dirname(bbdown) };
+  }
+  return {};
 }
 
 function formatToolLaunchError(toolName: string, toolPath: string, err: unknown) {
@@ -49,10 +84,6 @@ function formatToolLaunchError(toolName: string, toolPath: string, err: unknown)
 
   return `${toolName} 执行失败：${message}`;
 }
-
-const BBDOWN = resolveToolPath("BBDOWN_PATH", ["BBDown.exe", "BBDown"], "BBDown");
-const FFMPEG = resolveToolPath("FFMPEG_PATH", ["ffmpeg.exe", "ffmpeg"], "ffmpeg");
-const FFPROBE = resolveToolPath("FFPROBE_PATH", ["ffprobe.exe", "ffprobe"], "ffprobe");
 
 /** BBDown 在 Windows 上可能输出 UTF-8 或 GBK，自动检测 */
 function decodeBbdownOutput(stdout: Buffer, stderr: Buffer): string {
@@ -78,28 +109,30 @@ function decodeBbdownOutput(stdout: Buffer, stderr: Buffer): string {
 }
 
 export function getToolsPath() {
-  return { bbdown: BBDOWN, ffmpeg: FFMPEG, ffprobe: FFPROBE };
+  return { bbdown: getBbdownPath(), ffmpeg: getFfmpegPath(), ffprobe: getFfprobePath() };
 }
 
 async function runBbdown(args: string[], timeoutMs = 120000): Promise<string> {
+  const bbdown = getBbdownPath();
   try {
-    const { stdout, stderr } = await execFileAsync(BBDOWN, args, {
+    const { stdout, stderr } = await execFileAsync(bbdown, args, {
       timeout: timeoutMs,
       encoding: "buffer",
       maxBuffer: 20 * 1024 * 1024,
+      ...bbdownExecOptions(),
     });
     return decodeBbdownOutput(stdout as Buffer, stderr as Buffer);
   } catch (err) {
     const execErr = err as NodeJS.ErrnoException & { stderr?: Buffer; stdout?: Buffer };
     if (execErr.code === "ENOENT" || execErr.code === "EACCES") {
-      throw new Error(formatToolLaunchError("BBDown", BBDOWN, err));
+      throw new Error(formatToolLaunchError("BBDown", bbdown, err));
     }
     const hint = decodeBbdownOutput(
       (execErr.stdout as Buffer) || Buffer.alloc(0),
       (execErr.stderr as Buffer) || Buffer.alloc(0),
     ).trim();
     throw new Error(
-      hint ? `BBDown 执行失败：${hint.slice(-800)}` : formatToolLaunchError("BBDown", BBDOWN, err),
+      hint ? `BBDown 执行失败：${hint.slice(-800)}` : formatToolLaunchError("BBDown", bbdown, err),
     );
   }
 }
@@ -206,7 +239,8 @@ export function downloadBilibiliMedia(
     args.push("-p", String(page));
   }
 
-  const proc = spawn(BBDOWN, args);
+  const bbdown = getBbdownPath();
+  const proc = spawn(bbdown, args, bbdownExecOptions());
   let stderrBuf = Buffer.alloc(0);
   let stdoutBuf = Buffer.alloc(0);
 
@@ -253,7 +287,7 @@ export function downloadBilibiliMedia(
   });
 
   proc.on("error", (err) => {
-    onError(formatToolLaunchError("BBDown", BBDOWN, err));
+    onError(formatToolLaunchError("BBDown", bbdown, err));
   });
 
   return proc;
@@ -297,13 +331,14 @@ export async function clipMedia(
   }
 
   try {
-    await execFileAsync(FFMPEG, args, {
+    const ffmpeg = getFfmpegPath();
+    await execFileAsync(ffmpeg, args, {
       timeout: 120000,
       encoding: "buffer",
       maxBuffer: 10 * 1024 * 1024,
     });
   } catch (err) {
-    throw new Error(formatToolLaunchError("FFmpeg", FFMPEG, err));
+    throw new Error(formatToolLaunchError("FFmpeg", getFfmpegPath(), err));
   }
 
   return {
@@ -330,8 +365,9 @@ export async function clipAudio(
 export async function getAudioDuration(filePath: string): Promise<number> {
   let stdout: string;
   try {
+    const ffprobe = getFfprobePath();
     const result = await execFileAsync(
-      FFPROBE,
+      ffprobe,
       [
         "-v",
         "error",
@@ -345,7 +381,7 @@ export async function getAudioDuration(filePath: string): Promise<number> {
     );
     stdout = result.stdout;
   } catch (err) {
-    throw new Error(formatToolLaunchError("FFprobe", FFPROBE, err));
+    throw new Error(formatToolLaunchError("FFprobe", getFfprobePath(), err));
   }
 
   return parseFloat(stdout.trim());
