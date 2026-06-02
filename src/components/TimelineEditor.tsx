@@ -27,7 +27,8 @@ export default function TimelineEditor({
 }: TimelineEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const pointerActiveRef = useRef(false);
+  const activePointerIdRef = useRef<number | null>(null);
+  const draggingRef = useRef<"start" | "end" | null>(null);
   const [dragging, setDragging] = useState<"start" | "end" | null>(null);
   const [hoverHandle, setHoverHandle] = useState<"start" | "end" | null>(null);
 
@@ -148,8 +149,10 @@ export default function TimelineEditor({
       const mouseX = clientX - container.getBoundingClientRect().left;
       const handle = hitTestHandle(mouseX);
       if (handle) {
+        draggingRef.current = handle;
         setDragging(handle);
       } else {
+        draggingRef.current = null;
         onSeek?.(getTimeFromClientX(clientX));
       }
     },
@@ -158,9 +161,10 @@ export default function TimelineEditor({
 
   const moveInteraction = useCallback(
     (clientX: number) => {
-      if (dragging) {
+      const activeDrag = draggingRef.current;
+      if (activeDrag) {
         const time = getTimeFromClientX(clientX);
-        if (dragging === "start") {
+        if (activeDrag === "start") {
           onStartTimeChange(Math.min(time, endTime - 1));
         } else {
           onEndTimeChange(Math.max(time, startTime + 1));
@@ -172,34 +176,15 @@ export default function TimelineEditor({
         setHoverHandle(hitTestHandle(mouseX));
       }
     },
-    [dragging, getTimeFromClientX, onStartTimeChange, onEndTimeChange, startTime, endTime, hitTestHandle],
+    [getTimeFromClientX, onStartTimeChange, onEndTimeChange, startTime, endTime, hitTestHandle],
   );
 
   const endInteraction = useCallback(() => {
-    pointerActiveRef.current = false;
+    draggingRef.current = null;
     setDragging(null);
     setHoverHandle(null);
+    activePointerIdRef.current = null;
   }, []);
-
-  useEffect(() => {
-    const onPointerMove = (e: PointerEvent) => {
-      if (!pointerActiveRef.current) return;
-      e.preventDefault();
-      moveInteraction(e.clientX);
-    };
-    const onPointerUp = () => {
-      if (!pointerActiveRef.current) return;
-      endInteraction();
-    };
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, [moveInteraction, endInteraction]);
 
   return (
     <div className="w-full">
@@ -208,15 +193,30 @@ export default function TimelineEditor({
         className="relative w-full cursor-crosshair select-none touch-none"
         onPointerDown={(e) => {
           e.preventDefault();
-          pointerActiveRef.current = true;
+          activePointerIdRef.current = e.pointerId;
+          e.currentTarget.setPointerCapture(e.pointerId);
           beginInteraction(e.clientX);
         }}
         onPointerMove={(e) => {
-          if (pointerActiveRef.current) return;
-          moveInteraction(e.clientX);
+          if (activePointerIdRef.current === e.pointerId) {
+            e.preventDefault();
+            moveInteraction(e.clientX);
+            return;
+          }
+          if (activePointerIdRef.current === null) {
+            moveInteraction(e.clientX);
+          }
         }}
-        onPointerUp={endInteraction}
-        onPointerCancel={endInteraction}
+        onPointerUp={(e) => {
+          if (activePointerIdRef.current !== e.pointerId) return;
+          e.currentTarget.releasePointerCapture(e.pointerId);
+          endInteraction();
+        }}
+        onPointerCancel={(e) => {
+          if (activePointerIdRef.current !== e.pointerId) return;
+          e.currentTarget.releasePointerCapture(e.pointerId);
+          endInteraction();
+        }}
         onMouseLeave={() => !dragging && setHoverHandle(null)}
       >
         <canvas ref={canvasRef} className="w-full rounded-lg" />
