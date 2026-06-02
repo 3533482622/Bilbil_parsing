@@ -14,9 +14,9 @@ ARG BBDOWN_VERSION=1.6.3
 ARG BBDOWN_BUILD=20240814
 RUN curl -fsSL -o /tmp/bbdown.zip \
       "https://github.com/nilaoda/BBDown/releases/download/${BBDOWN_VERSION}/BBDown_${BBDOWN_VERSION}_${BBDOWN_BUILD}_linux-x64.zip" \
-    && unzip -q /tmp/bbdown.zip -d /tmp/bbdown \
-    && install -m 755 /tmp/bbdown/BBDown /usr/local/bin/BBDown \
-    && rm -rf /tmp/bbdown /tmp/bbdown.zip
+    && unzip -q /tmp/bbdown.zip -d /opt/bbdown \
+    && chmod -R 755 /opt/bbdown \
+    && rm -f /tmp/bbdown.zip
 
 WORKDIR /app
 
@@ -28,7 +28,8 @@ RUN npm run build
 
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV BBDOWN_PATH=/usr/local/bin/BBDown
+ENV BBDOWN_PATH=/opt/bbdown/BBDown
+ENV PATH=/opt/bbdown:${PATH}
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 ENV FFPROBE_PATH=/usr/bin/ffprobe
 
