@@ -13,6 +13,16 @@ interface MediaPlayerProps {
   endTime?: number;
 }
 
+function readMediaDuration(media: HTMLMediaElement): number {
+  const d = media.duration;
+  return Number.isFinite(d) && d > 0 ? d : 0;
+}
+
+function clampTime(time: number, max: number): number {
+  if (!Number.isFinite(max) || max <= 0) return Math.max(0, time);
+  return Math.max(0, Math.min(max, time));
+}
+
 export default function MediaPlayer({
   src,
   mediaKind,
@@ -23,14 +33,40 @@ export default function MediaPlayer({
   endTime,
 }: MediaPlayerProps) {
   const mediaRef = useRef<HTMLAudioElement | HTMLVideoElement>(null);
-  const seekingTargetRef = useRef<HTMLElement | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
+  const durationRef = useRef(0);
+  const isScrubbingRef = useRef(false);
+
+  const onTimeUpdateRef = useRef(onTimeUpdate);
+  const onLoadedRef = useRef(onLoaded);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onTimeUpdateRef.current = onTimeUpdate;
+  }, [onTimeUpdate]);
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  }, [onLoaded]);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8);
   const [showVolume, setShowVolume] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [seeking, setSeeking] = useState(false);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  const applyDuration = useCallback((dur: number) => {
+    if (dur <= 0) return;
+    durationRef.current = dur;
+    setDuration(dur);
+    onLoadedRef.current?.(dur);
+  }, []);
 
   useEffect(() => {
     const media = mediaRef.current;
@@ -39,44 +75,55 @@ export default function MediaPlayer({
     setPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    durationRef.current = 0;
 
-    const handleLoaded = () => {
-      if (!Number.isFinite(media.duration) || media.duration <= 0) return;
-      setDuration(media.duration);
-      onLoaded?.(media.duration);
+    const syncDuration = () => {
+      const dur = readMediaDuration(media);
+      if (dur > 0) applyDuration(dur);
     };
 
     const handleTimeUpdate = () => {
-      setCurrentTime(media.currentTime);
-      onTimeUpdate?.(media.currentTime, media.duration);
+      if (isScrubbingRef.current) return;
+      const t = media.currentTime;
+      setCurrentTime(t);
+      const dur = durationRef.current || readMediaDuration(media);
+      onTimeUpdateRef.current?.(t, dur);
     };
 
     const handleEnded = () => setPlaying(false);
 
     const handleError = () => {
-      onError?.("不支持远程预览");
+      onErrorRef.current?.("不支持远程预览");
     };
 
-    media.addEventListener("loadedmetadata", handleLoaded);
-    media.addEventListener("durationchange", handleLoaded);
-    media.addEventListener("canplay", handleLoaded);
+    const handlePlay = () => setPlaying(true);
+    const handlePause = () => setPlaying(false);
+
+    media.addEventListener("loadedmetadata", syncDuration);
+    media.addEventListener("durationchange", syncDuration);
+    media.addEventListener("canplay", syncDuration);
     media.addEventListener("timeupdate", handleTimeUpdate);
     media.addEventListener("ended", handleEnded);
     media.addEventListener("error", handleError);
+    media.addEventListener("play", handlePlay);
+    media.addEventListener("pause", handlePause);
+
     media.load();
     if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      handleLoaded();
+      syncDuration();
     }
 
     return () => {
-      media.removeEventListener("loadedmetadata", handleLoaded);
-      media.removeEventListener("durationchange", handleLoaded);
-      media.removeEventListener("canplay", handleLoaded);
+      media.removeEventListener("loadedmetadata", syncDuration);
+      media.removeEventListener("durationchange", syncDuration);
+      media.removeEventListener("canplay", syncDuration);
       media.removeEventListener("timeupdate", handleTimeUpdate);
       media.removeEventListener("ended", handleEnded);
       media.removeEventListener("error", handleError);
+      media.removeEventListener("play", handlePlay);
+      media.removeEventListener("pause", handlePause);
     };
-  }, [src, mediaKind, onTimeUpdate, onLoaded, onError]);
+  }, [src, mediaKind, applyDuration]);
 
   useEffect(() => {
     const media = mediaRef.current;
@@ -84,6 +131,79 @@ export default function MediaPlayer({
     media.volume = volume;
     media.muted = muted;
   }, [volume, muted, src, mediaKind]);
+
+  const getEffectiveDuration = useCallback((): number => {
+    const media = mediaRef.current;
+    if (!media) return durationRef.current;
+    return durationRef.current > 0 ? durationRef.current : readMediaDuration(media);
+  }, []);
+
+  const seekTo = useCallback(
+    (time: number) => {
+      const media = mediaRef.current;
+      if (!media) return;
+      const max = getEffectiveDuration();
+      if (max <= 0) return;
+      const nextTime = clampTime(time, max);
+      media.currentTime = nextTime;
+      setCurrentTime(nextTime);
+    },
+    [getEffectiveDuration],
+  );
+
+  const seekFromClientX = useCallback(
+    (clientX: number, track: HTMLElement) => {
+      const rect = track.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const max = getEffectiveDuration();
+      if (max <= 0) return;
+      seekTo(ratio * max);
+    },
+    [getEffectiveDuration, seekTo],
+  );
+
+  const endScrub = useCallback(() => {
+    activePointerIdRef.current = null;
+    isScrubbingRef.current = false;
+  }, []);
+
+  const beginScrub = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      activePointerIdRef.current = e.pointerId;
+      isScrubbingRef.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      seekFromClientX(e.clientX, e.currentTarget);
+    },
+    [seekFromClientX],
+  );
+
+  const moveScrub = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== e.pointerId) return;
+      e.preventDefault();
+      seekFromClientX(e.clientX, e.currentTarget);
+    },
+    [seekFromClientX],
+  );
+
+  const releaseScrub = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== e.pointerId) return;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      endScrub();
+    },
+    [endScrub],
+  );
 
   const togglePlay = useCallback(() => {
     const media = mediaRef.current;
@@ -94,9 +214,8 @@ export default function MediaPlayer({
       if (startTime !== undefined && media.currentTime < startTime) {
         media.currentTime = startTime;
       }
-      media.play().catch(() => {});
+      void media.play().catch(() => {});
     }
-    setPlaying(!playing);
   }, [playing, startTime]);
 
   useEffect(() => {
@@ -108,54 +227,12 @@ export default function MediaPlayer({
         media.pause();
         media.currentTime = endTime;
         setPlaying(false);
+        setCurrentTime(endTime);
       }
     };
     media.addEventListener("timeupdate", checkBounds);
     return () => media.removeEventListener("timeupdate", checkBounds);
-  }, [endTime]);
-
-  const seek = useCallback(
-    (time: number) => {
-      const media = mediaRef.current;
-      if (!media || !Number.isFinite(duration) || duration <= 0) return;
-      const nextTime = Math.max(0, Math.min(duration, time));
-      media.currentTime = nextTime;
-      setCurrentTime(nextTime);
-    },
-    [duration],
-  );
-
-  const seekFromEvent = useCallback(
-    (clientX: number, target: HTMLElement) => {
-      const rect = target.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      seek(ratio * duration);
-    },
-    [duration, seek],
-  );
-
-  useEffect(() => {
-    if (!seeking) return;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const target = seekingTargetRef.current;
-      if (target) seekFromEvent(event.clientX, target);
-    };
-
-    const stopSeeking = () => {
-      seekingTargetRef.current = null;
-      setSeeking(false);
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", stopSeeking);
-    window.addEventListener("pointercancel", stopSeeking);
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", stopSeeking);
-      window.removeEventListener("pointercancel", stopSeeking);
-    };
-  }, [seeking, seekFromEvent]);
+  }, [endTime, src, mediaKind]);
 
   const formatTime = (t: number) => {
     const h = Math.floor(t / 3600);
@@ -190,29 +267,24 @@ export default function MediaPlayer({
     }
   };
 
+  const canSeek = duration > 0;
+
   const progressBar = (className: string) => (
     <div
-      data-media-progress
-      className={`h-2.5 sm:h-2 bg-gray-200 dark:bg-gray-600 rounded-full cursor-pointer relative group touch-none ${className}`}
-      onClick={(e) => seekFromEvent(e.clientX, e.currentTarget)}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        seekingTargetRef.current = e.currentTarget;
-        setSeeking(true);
-        seekFromEvent(e.clientX, e.currentTarget);
-      }}
-      onTouchStart={(e) => {
-        if (e.touches.length === 1) {
-          e.preventDefault();
-          seekFromEvent(e.touches[0].clientX, e.currentTarget);
-        }
-      }}
-      onTouchMove={(e) => {
-        if (e.touches.length === 1) {
-          e.preventDefault();
-          seekFromEvent(e.touches[0].clientX, e.currentTarget);
-        }
-      }}
+      role="slider"
+      aria-label="播放进度"
+      aria-valuemin={0}
+      aria-valuemax={duration}
+      aria-valuenow={currentTime}
+      aria-disabled={!canSeek}
+      className={`h-2.5 sm:h-2 bg-gray-200 dark:bg-gray-600 rounded-full relative group touch-none ${
+        canSeek ? "cursor-pointer" : "cursor-not-allowed opacity-70"
+      } ${className}`}
+      onPointerDown={canSeek ? beginScrub : undefined}
+      onPointerMove={canSeek ? moveScrub : undefined}
+      onPointerUp={canSeek ? releaseScrub : undefined}
+      onPointerCancel={canSeek ? releaseScrub : undefined}
+      onLostPointerCapture={endScrub}
     >
       {startTime !== undefined && endTime !== undefined && duration > 0 && (
         <div
@@ -224,8 +296,10 @@ export default function MediaPlayer({
         />
       )}
       <div
-        className="h-full bg-pink-600 rounded-full relative z-10 transition-all pointer-events-none"
-        style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+        className="h-full bg-pink-600 rounded-full relative z-10 transition-[width] duration-75 pointer-events-none"
+        style={{
+          width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
+        }}
       />
     </div>
   );
@@ -247,13 +321,16 @@ export default function MediaPlayer({
       )}
 
       {mediaKind === "audio" && (
-        <audio key={`${mediaKind}:${src}`} ref={mediaRef as React.RefObject<HTMLAudioElement | null>} src={src} preload="metadata" />
+        <audio
+          key={`${mediaKind}:${src}`}
+          ref={mediaRef as React.RefObject<HTMLAudioElement | null>}
+          src={src}
+          preload="metadata"
+        />
       )}
 
-      {/* 移动端：进度条独占一行 */}
       <div className="sm:hidden w-full">{progressBar("w-full")}</div>
 
-      {/* 控制栏：小屏两行逻辑由上方进度条 + 下行按钮组成；大屏单行 */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
         <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
           <button
@@ -277,12 +354,8 @@ export default function MediaPlayer({
             {formatTime(currentTime)} / {formatTime(duration)}
           </span>
 
-          {/* 桌面端进度条 */}
-          <div className="hidden sm:block flex-1 min-w-0">
-            {progressBar("w-full")}
-          </div>
+          <div className="hidden sm:block flex-1 min-w-0">{progressBar("w-full")}</div>
 
-          {/* 音量：移动端仅图标，点击展开滑条 */}
           <div className="relative flex items-center gap-2 shrink-0 ml-auto sm:ml-0">
             <button
               type="button"

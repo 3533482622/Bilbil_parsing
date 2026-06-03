@@ -21,7 +21,7 @@ export default function Home() {
 
   const [mediaSrc, setMediaSrc] = useState("");
   const [mediaFilePath, setAudioFilePath] = useState("");
-  const [mediaDuration, setAudioDuration] = useState(0);
+  const [mediaDuration, setMediaDuration] = useState(0);
   const [startTime, setStartTime] = useState(0);
   const [endTime, setEndTime] = useState(0);
 
@@ -118,9 +118,14 @@ export default function Home() {
   }, [url, selectedPage, mediaKind, fetchLibrary, videoInfo]);
 
   const handleMediaLoaded = useCallback((dur: number) => {
-    setAudioDuration(dur);
+    setMediaDuration(dur);
     setStartTime(0);
     setEndTime(dur);
+  }, []);
+
+  const handleMediaError = useCallback((msg: string) => {
+    setError(msg);
+    setStep("parsed" as AppStep);
   }, []);
 
   const handleClip = useCallback(
@@ -274,10 +279,7 @@ export default function Home() {
               src={mediaSrc}
               mediaKind={mediaKind}
               onLoaded={handleMediaLoaded}
-              onError={(msg) => {
-                setError(msg);
-                setStep("parsed" as AppStep);
-              }}
+              onError={handleMediaError}
               startTime={startTime}
               endTime={endTime}
             />
