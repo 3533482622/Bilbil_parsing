@@ -12,11 +12,11 @@ const execFileAsync = promisify(execFile);
 
 const isWindows = process.platform === "win32";
 const LOCAL_TOOLS_DIRS = [
-  path.join(process.cwd(), "tools"),
-  path.join(process.cwd(), "redio", "tools"),
   ...(process.env.NODE_ENV === "production"
     ? []
     : [path.resolve(process.cwd(), "..", "redio", "tools")]),
+  path.join(process.cwd(), "tools"),
+  path.join(process.cwd(), "redio", "tools"),
 ];
 const PRODUCTION_TOOL_DIRS = ["/opt/bbdown", "/usr/local/bin"];
 
@@ -43,7 +43,12 @@ function resolveToolPath(envName: string, localNames: string[], fallbackCommand:
   }
 
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (!fs.existsSync(candidate)) continue;
+    // Windows: skip extensionless copies when .exe is expected (e.g. web/tools/BBDown)
+    if (isWindows && /\.exe$/i.test(localNames[0]) && !/\.exe$/i.test(candidate)) {
+      continue;
+    }
+    return candidate;
   }
 
   if (!isWindows) return fallbackCommand;

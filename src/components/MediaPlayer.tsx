@@ -83,6 +83,9 @@ export default function MediaPlayer({
     };
 
     const handleTimeUpdate = () => {
+      if (durationRef.current <= 0) {
+        syncDuration();
+      }
       if (isScrubbingRef.current) return;
       const t = media.currentTime;
       setCurrentTime(t);
@@ -100,8 +103,10 @@ export default function MediaPlayer({
     const handlePause = () => setPlaying(false);
 
     media.addEventListener("loadedmetadata", syncDuration);
+    media.addEventListener("loadeddata", syncDuration);
     media.addEventListener("durationchange", syncDuration);
     media.addEventListener("canplay", syncDuration);
+    media.addEventListener("canplaythrough", syncDuration);
     media.addEventListener("timeupdate", handleTimeUpdate);
     media.addEventListener("ended", handleEnded);
     media.addEventListener("error", handleError);
@@ -109,14 +114,18 @@ export default function MediaPlayer({
     media.addEventListener("pause", handlePause);
 
     media.load();
-    if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      syncDuration();
-    }
+    syncDuration();
+    const syncTimers = [0, 100, 500, 1500].map((ms) =>
+      window.setTimeout(syncDuration, ms),
+    );
 
     return () => {
+      syncTimers.forEach((id) => window.clearTimeout(id));
       media.removeEventListener("loadedmetadata", syncDuration);
+      media.removeEventListener("loadeddata", syncDuration);
       media.removeEventListener("durationchange", syncDuration);
       media.removeEventListener("canplay", syncDuration);
+      media.removeEventListener("canplaythrough", syncDuration);
       media.removeEventListener("timeupdate", handleTimeUpdate);
       media.removeEventListener("ended", handleEnded);
       media.removeEventListener("error", handleError);
